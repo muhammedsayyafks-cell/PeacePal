@@ -21,9 +21,7 @@ export const connectToLive = (callbacks: LiveCallbacks): Promise<LiveSession> =>
       speechConfig: {
         voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } },
       },
-      systemInstruction: {
-        parts: [{ text: SYSTEM_PROMPT }]
-      },
+      systemInstruction: SYSTEM_PROMPT,
       outputAudioTranscription: {},
       inputAudioTranscription: {},
     },

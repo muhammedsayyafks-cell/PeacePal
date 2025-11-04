@@ -24,25 +24,22 @@ export const getGeminiResponse = async (userMessage: string, history: ChatHistor
 
   const modelName = isThinkingMode ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
   
-  const modelConfig: {
-    systemInstruction: { role: string; parts: { text: string }[] };
+  const config: {
+    systemInstruction: string;
     thinkingConfig?: { thinkingBudget: number };
   } = {
-    systemInstruction: {
-      role: 'model',
-      parts: [{ text: SYSTEM_PROMPT }]
-    }
+    systemInstruction: SYSTEM_PROMPT,
   };
 
   if (isThinkingMode) {
-    modelConfig.thinkingConfig = { thinkingBudget: 32768 };
+    config.thinkingConfig = { thinkingBudget: 32768 };
   }
 
   try {
     const response: GenerateContentResponse = await genAI.models.generateContent({
         model: modelName,
         contents: [...history, { role: 'user', parts: [{ text: userMessage }] }],
-        config: modelConfig,
+        config,
     });
 
     return response.text || "I'm not sure what to say.";

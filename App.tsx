@@ -19,22 +19,32 @@ import VoiceControl from './components/VoiceControl';
 import ThinkingModeToggle from './components/ThinkingModeToggle';
 
 // --- Firebase Configuration ---
-const firebaseConfig = typeof (window as any).__firebase_config !== 'undefined'
-  ? JSON.parse((window as any).__firebase_config)
-  : { apiKey: "YOUR_API_KEY", authDomain: "YOUR_AUTH_DOMAIN", projectId: "YOUR_PROJECT_ID" };
-
+const firebaseConfigString = typeof (window as any).__firebase_config !== 'undefined' 
+    ? (window as any).__firebase_config 
+    : null;
 const appId = typeof (window as any).__app_id !== 'undefined' ? (window as any).__app_id : 'default-app-id';
 
 // --- Firebase Initialization ---
-let app: FirebaseApp;
-let auth: Auth;
-let db: Firestore;
-try {
-  app = initializeApp(firebaseConfig);
-  auth = getAuth(app);
-  db = getFirestore(app);
-} catch (e) {
-  console.error("Firebase initialization failed:", e);
+let app: FirebaseApp | null = null;
+let auth: Auth | null = null;
+let db: Firestore | null = null;
+
+if (firebaseConfigString && firebaseConfigString !== 'undefined' && firebaseConfigString !== '{}') {
+  try {
+    const firebaseConfig = JSON.parse(firebaseConfigString);
+    // Add a check for a valid-looking apiKey to prevent initialization with placeholders
+    if (firebaseConfig.apiKey && !firebaseConfig.apiKey.includes("YOUR_API_KEY")) {
+        app = initializeApp(firebaseConfig);
+        auth = getAuth(app);
+        db = getFirestore(app);
+    } else {
+        console.warn("Firebase configuration contains a placeholder API key. Firebase features will be disabled.");
+    }
+  } catch (e) {
+    console.error("Firebase initialization failed while parsing config:", e);
+  }
+} else {
+  console.warn("Firebase configuration not found. Chat history will not be saved.");
 }
 
 const App: React.FC = () => {
@@ -79,7 +89,11 @@ const App: React.FC = () => {
 
   // --- Authentication ---
   useEffect(() => {
-    if (!auth) return;
+    if (!auth) {
+        setUserId('local-user'); // Use a local non-persistent ID
+        setIsAuthReady(true); // Ready the UI, but with disabled save features
+        return;
+    };
     const unsubscribe = onAuthStateChanged(auth, (user: User | null) => {
       if (user) {
         setUserId(user.uid);
@@ -93,7 +107,7 @@ const App: React.FC = () => {
     return () => unsubscribe();
   }, []);
   
-  // --- Message Loading ---
+  // --- Message Loading from Firebase ---
   useEffect(() => {
     if (!isAuthReady || !userId || !db) return;
     
@@ -107,12 +121,6 @@ const App: React.FC = () => {
       });
       msgs.sort((a, b) => a.createdAt.seconds - b.createdAt.seconds);
       setMessages(msgs);
-      
-      const history = msgs.map(msg => ({
-        role: msg.sender === 'bot' ? 'model' : 'user',
-        parts: [{ text: msg.text }]
-      } as ChatHistoryPart));
-      setChatHistory(history);
     }, (error) => {
       console.error("Error fetching messages: ", error);
     });
@@ -120,12 +128,23 @@ const App: React.FC = () => {
     return () => unsubscribe();
   }, [isAuthReady, userId]);
 
+  // --- Sync Local Messages to Chat History for AI Context ---
+  useEffect(() => {
+    const history = messages.map(msg => ({
+      role: msg.sender === 'bot' ? 'model' : 'user',
+      parts: [{ text: msg.text }]
+    } as ChatHistoryPart));
+    setChatHistory(history);
+  }, [messages]);
+
   const postBotMessage = useCallback(async (text: string) => {
     const botMessage: Omit<Message, 'id'> = {
       text: text,
       sender: 'bot',
       createdAt: Timestamp.now()
     };
+    // Post to local state immediately for responsiveness
+    setMessages(prev => [...prev, { ...botMessage, id: crypto.randomUUID() }]);
     await saveMessage(botMessage);
   }, [saveMessage]);
   
@@ -167,10 +186,14 @@ const App: React.FC = () => {
       sender: 'user',
       createdAt: Timestamp.now()
     };
-    await saveMessage(userMessage);
+    
     const currentInput = input;
     setInput('');
     
+    // Optimistically update UI
+    setMessages(prev => [...prev, { ...userMessage, id: crypto.randomUUID() }]);
+    await saveMessage(userMessage);
+
     if (!checkTriggers(currentInput)) {
       setIsBotLoading(true);
       const botText = await getGeminiResponse(currentInput, chatHistory, isThinkingMode);
@@ -245,7 +268,7 @@ const App: React.FC = () => {
     }, [saveMessage]);
   
     const stopVoiceSession = useCallback(() => {
-      sessionPromiseRef.current?.then(session => session.close());
+      sessionPromiseRef.current?.then(session => session.close()).catch(e => console.error("Error closing session:", e));
       micStreamRef.current?.getTracks().forEach(track => track.stop());
       scriptProcessorRef.current?.disconnect();
       inputAudioContextRef.current?.close();
@@ -295,8 +318,14 @@ const App: React.FC = () => {
   
         sessionPromiseRef.current = connectToLive({
           onmessage: handleLiveMessage,
-          onerror: (e) => { console.error("Live session error:", e); stopVoiceSession(); },
-          onclose: () => { stopVoiceSession(); },
+          onerror: (e) => { 
+              console.error("Live session error:", e);
+              postBotMessage("I'm sorry, I'm having trouble with my voice connection. This might be due to a network issue or an API configuration problem. Please try again in a moment.");
+              stopVoiceSession(); 
+          },
+          onclose: () => { 
+              stopVoiceSession(); 
+          },
         });
         
         await sessionPromiseRef.current;
@@ -305,9 +334,11 @@ const App: React.FC = () => {
   
       } catch (err) {
         console.error("Failed to start voice session:", err);
+        const errorMessage = (err instanceof Error) ? err.message : "An unknown error occurred.";
+        postBotMessage(`Could not start the voice session. Please ensure your microphone is enabled and the API is configured correctly. Error: ${errorMessage}`);
         stopVoiceSession();
       }
-    }, [handleLiveMessage, stopVoiceSession]);
+    }, [handleLiveMessage, stopVoiceSession, postBotMessage]);
   
     const handleToggleVoiceSession = useCallback(() => {
       if (isVoiceSessionActive || isConnecting) {
