@@ -1,0 +1,7 @@
+{
+  "name": "PeacePal AI",
+  "description": "An AI companion for psychological support, providing a safe space to feel heard. It uses guided questionnaires and conversation to help users explore their feelings.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
